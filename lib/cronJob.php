@@ -13,30 +13,28 @@ class cronJob {
     private array  $vars;
 
     private static array $days = [
-        NULL,
-        'mon',
-        'tue',
-        'wed',
-        'thu',
-        'fri',
-        'sat',
-        'sun',
+        'mon' => 1,
+        'tue' => 2,
+        'wed' => 3,
+        'thu' => 4,
+        'fri' => 5,
+        'sat' => 6,
+        'sun' => 7,
     ];
 
     private static array $months = [
-        NULL,
-        'jan',
-        'feb',
-        'mar',
-        'apr',
-        'may',
-        'jun',
-        'jul',
-        'aug',
-        'sep',
-        'oct',
-        'nov',
-        'dec',
+        'jan' =>  1,
+        'feb' =>  2,
+        'mar' =>  3,
+        'apr' =>  4,
+        'may' =>  5,
+        'jun' =>  6,
+        'jul' =>  7,
+        'aug' =>  8,
+        'sep' =>  9,
+        'oct' => 10,
+        'nov' => 11,
+        'dec' => 12,
     ];
 
     function __construct(string $minute, string $hour, string $mday, string $month, string $wday, string $command, array $vars) {
@@ -219,5 +217,24 @@ class cronJob {
     }
 
     private function matchGeneralValue(string $unit, string $value, array $mnemonics) : bool {
+        if ($this->hasStep($value)) {
+            list($value, $step) = $this->getValueAndStep($value);
+
+        } else {
+            $step = 1;
+
+        }
+
+        if ($this->isRange($value)) {
+            list($min, $max) = array_map('intval', $this->rangeToValues($value));
+            if (isset($mnemonics[$min])) $value = $mnemonics[$min];
+            if (isset($mnemonics[$max])) $value = $mnemonics[$max];
+
+            return $this->matchNumericValue($unit, sprintf('%u-%u/%u', $min, $max, $step));
+
+        } else {
+            if (isset($mnemonics[$value])) $value = $mnemonics[$value];
+            return $this->matchNumericValue($unit, sprintf('%u/%u', $value, $step));
+        }
     }
 }
