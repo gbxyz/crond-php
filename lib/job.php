@@ -1,9 +1,11 @@
 <?php
 
+namespace cron;
+
 /**
  * class representing a cron job
  */
-class cronJob {
+class job {
     private string $minute;
     private string $hour;
     private string $mday;
@@ -50,8 +52,8 @@ class cronJob {
     /**
      * run the command specified in this job
      */
-    function run() : cronProcess {
-        return new cronProcess($this->command, $this->vars);
+    function run() : process {
+        return new process($this->command, $this->vars);
     }
 
     /**
@@ -59,6 +61,13 @@ class cronJob {
      * @return bool true when the 'minute', 'hour', and 'month' fields match the current time, and at least one of the two 'day' fields ('day of month', or 'day of week') match the current time.
      */
     function matches(int $time) : bool {
+        $matches = [
+            $this->minuteMatches($time),
+            $this->hourMatches($time),
+            $this->monthMatches($time),
+            ($this->dayOfMonthMatches($time) || $this->dayOfWeekMatches($time)),
+        ];
+        var_export($matches);
         return (
             $this->minuteMatches($time) &&
             $this->hourMatches($time)   &&
@@ -78,14 +87,14 @@ class cronJob {
      * does the hour specification for this job match the given timestamp?
      */
     private function hourMatches(int $time) : bool {
-        return $this->matchNumeric(intval(gmdate('g', $time)), $this->minute);
+        return $this->matchNumeric(intval(gmdate('G', $time)), $this->hour);
     }
 
     /**
      * does the month day specification for this job match the given timestamp?
      */
     private function dayOfMonthMatches(int $time) : bool {
-        return $this->matchNumeric(intval(gmdate('j', $time)), $this->minute);
+        return $this->matchNumeric(intval(gmdate('j', $time)), $this->mday);
     }
 
     /**
@@ -93,9 +102,10 @@ class cronJob {
      */
     private function monthMatches(int $time) : bool {
         $unit = intval(gmdate('n', $time));
+
         if ($this->containsList($this->month)) {
             foreach ($this->listToValues($this->month) as $value) {
-                if ($this->matchGeneralValue($unit, $value)) return true;
+                if ($this->matchGeneralValue($unit, $value, self::$months)) return true;
             }
 
             return false;
@@ -111,7 +121,18 @@ class cronJob {
      */
     private function dayOfWeekMatches(int $time) : bool {
         $unit = intval(gmdate('N', $time));
-        return $this->matchGeneral($time, $unit, $this->month, self::$months);
+
+        if ($this->containsList($this->month)) {
+            foreach ($this->listToValues($this->wday) as $value) {
+                if ($this->matchGeneralValue($unit, $value, self::$days)) return true;
+            }
+
+            return false;
+
+        } else {
+            return $this->matchGeneralValue($unit, $this->wday, self::$days);
+
+        }
     }
 
     /**
@@ -162,6 +183,7 @@ class cronJob {
      * does the given specification match the unit?
      */
     private function matchNumeric(int $unit, string $spec) : bool {
+        log::debug("%s(%u, '%s')", __METHOD__, $unit, $spec);
         if ($this->containsList($spec)) {
             foreach ($this->listToValues($spec) as $value) {
                 if ($this->matchNumericValue($unit, $value)) return true;
@@ -190,7 +212,8 @@ class cronJob {
         } else {
             if ($this->isRange($value)) {
                 list($min, $max) = array_map('intval', $this->rangeToValues($value));
-                return ($min >= $unit && $unit <= $max && 0 == $unit % $step);
+                $m = ($min <= $unit && $unit <= $max && 0 == $unit % $step);
+                return $m;
 
             } else {
                 return ($unit == intval($value) && 0 == $unit % $step);
@@ -230,11 +253,25 @@ class cronJob {
             if (isset($mnemonics[$min])) $value = $mnemonics[$min];
             if (isset($mnemonics[$max])) $value = $mnemonics[$max];
 
-            return $this->matchNumericValue($unit, sprintf('%u-%u/%u', $min, $max, $step));
+            return $this->matchNumericValue($unit, sprintf('%s-%s/%u', $min, $max, $step));
 
         } else {
             if (isset($mnemonics[$value])) $value = $mnemonics[$value];
-            return $this->matchNumericValue($unit, sprintf('%u/%u', $value, $step));
+            return $this->matchNumericValue($unit, sprintf('%s/%u', $value, $step));
         }
+    }
+
+    function timeSpecToString() : string {
+        return implode(' ', [
+            $this->minute,
+            $this->hour,
+            $this->mday,
+            $this->month,
+            $this->wday,
+        ]);
+    }
+
+    function command() : string {
+        return $this->command;
     }
 }

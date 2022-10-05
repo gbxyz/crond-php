@@ -1,51 +1,50 @@
 <?php
 
+namespace cron;
+
 /**
  * class representing a cron daemon.
  * unlike the system's crond(8), this daemon only uses a single crontab file, and only uses UTC.
  */
-class cronDaemon {
-    private string $file;
-    private array  $vars;
-    private array  $jobs;
-    private array  $procs;
+class daemon {
+    private string      $file;
+    private array       $vars;
+    private array       $jobs;
+    private array       $procs;
+    private static int  $debug;
 
     /**
      * @param string $file the crontab file - see man crond(5) for more information
      * @see https://man7.org/linux/man-pages/man5/crontab.5.html
      */
-    function __construct(string $file='/etc/crontab') {
-        error_log('running');
+    function __construct(string $file='/etc/crontab', bool $debug=false) {
+        self::$debug = $debug;
+
         $this->file     = $file;
-        $this->jobs     = array();
-        $this->procs    = array();
+        $this->jobs     = [];
+        $this->procs    = [];
         $this->load();
+        log::debug('initialised');
     }
 
     /**
      * run the daemon.
-     * this method installs a SIGCHLD signal handler (for dealing with child processes which had finished),
-     * and a SIGHUP handler so it can reload the crontab file.
     */
     function run() {
-        pcntl_signal(SIGCHLD, function($signo) {
-            $this->reapProcesses();
-        });
+        log::debug('running');
 
-        pcntl_signal(SIGHUP, function($signo) {
-            $this->load();
-        });
-
-        error_log('entering main loop');
+        log::debug('entering main loop');
         while (true) {
             $this->sleepToStartOfNextMinute();
             $this->runJobs(time());
+
+            log::debug(sprintf('current memory usage: %.1fKB, peak: %.1fKB', memory_get_usage() / 1000, memory_get_peak_usage() / 1000));
         }
     }
 
     /**
      * run once, for the commands that would be run at the specified time
-     * @return array an array of cronProcess objects representing the running processes. No signal handlers will be installed, so you must handle terminations yourself.
+     * @return array an array of process objects representing the running processes. No signal handlers will be installed, so you must handle terminations yourself.
      */
     function runFor(int $time) : array {
         $this->runJobs($time);
@@ -56,13 +55,27 @@ class cronDaemon {
      * run any jobs due to run at this particular moment in time
      */
     private function runJobs(int $time) {
+        log::debug('running jobs for %s', gmdate('r', $time));
         foreach ($this->jobs as $job) {
-            if ($job->matches($time)) {
-                // spawn a new process
-                $proc = $job->run();
+            if (!$job->matches($time)) {
+                log::debug('no match for %s', $job->timeSpecToString());
 
-                // store the process in the $procs array
-                $this->procs[$proc->pid()] = $proc;
+            } else {
+                log::debug("time spec %s matches, executing '%s'", $job->timeSpecToString(), $job->command());
+
+                try {
+                    // spawn a new process
+                    $proc = $job->run();
+
+                    log::debug(sprintf('spawned process %u', $proc->pid()));
+
+                    // store the process in the $procs array
+                    $this->procs[$proc->pid()] = $proc;
+
+                } catch (exception $e) {
+                    log::warn($e->getMessage());
+
+                }
             }
         }
     }
@@ -74,8 +87,11 @@ class cronDaemon {
     private function reapProcesses() {
         foreach ($this->procs as $pid => $proc) {
             if (!$proc->running()) {
+                log::debug(sprintf('pid #%u has finished', $pid));
+
                 // get the process's output
-                $output = preg_split('/\n/', trim(stream_get_contents($proc->stdout())), -1, PREG_SPLIT_NO_EMPTY);
+                $output = preg_split('/\n/', trim(stream_get_contents($proc->stdout())), -1);
+                log::debug(sprintf('pid #%u: %u output lines', count($output)));
 
                 // stream the process's STDERR to our STDERR
                 $fh = $proc->stderr();
@@ -89,7 +105,7 @@ class cronDaemon {
                             continue;
 
                         } else {
-                            error_log($line);
+                            log::debug($line);
 
                         }
                     }
@@ -99,38 +115,48 @@ class cronDaemon {
                 $result = $proc->close();
                 unset($this->procs[$pid]);
 
-                error_log(sprintf('pid #%u (%s) exited with code %d', $pid, $proc->command(), $result));
+                log::debug(sprintf('pid #%u (%s) exited with code %d', $pid, $proc->command(), $result));
             }
         }
+        log::debug(sprintf('%u processes still running', count($this->procs)));
     }
 
     /**
      * load the crontab file
      */
     private function load() {
-        error_log(sprintf('loading crontab from %s', $this->file));
+        log::debug(sprintf('loading crontab from %s', $this->file));
 
         $fh = fopen($this->file, 'r');
         if (!is_resource($fh)) {
-            throw new cronException("unable to read {$this->file}");
+            log::error("unable to read {$this->file}");
 
         } else {
-            $this->jobs = array();
-            $this->vars = array();
+            $this->jobs = [];
+            $this->vars = [];
+
+            $ln = 0;
 
             while (true) {
                 if (feof($fh)) {
                     break;
 
                 } else {
+                    $ln++;
+
                     $line = fgets($fh);
 
                     if (false === $line || strlen($line) < 1) {
                         continue;
 
                     } else {
-                        $this->parseLine(trim($line));
+                        try {
+                            $this->parseLine(ltrim($line));
 
+                        } catch (exception $e) {
+                            log::warn(sprintf('error parsing %s at line %u (%s)', $this->file, $ln, $e->getMessage()));
+
+                        }
                     }
                 }
             }
@@ -171,8 +197,8 @@ class cronDaemon {
      * parse a job specification and create a new job object which will be stored in the $jobs array
      */
     private function parseJob(string $line) {
-        list($minute, $hour, $mday, $month, $wday, $command) = preg_split('/[ \t]+/', $line, 6);
-        $this->jobs[] = new cronJob($minute, $hour, $mday, $month, $wday, $command, $this->vars);
+        list($minute, $hour, $mday, $month, $wday, $command) = preg_split('/[ \t]+/', rtrim($line), 6);
+        $this->jobs[] = new job($minute, $hour, $mday, $month, $wday, $command, $this->vars);
     }
 
     /**
@@ -193,11 +219,15 @@ class cronDaemon {
             intval(gmdate('Y', intval($from))),
         );
 
-        $dt     = $to - $from;
+        $dt = $to - $from;
+
+        log::debug(sprintf('sleeping %.03fs until %s', $dt, gmdate('r', $to)));
+
         $secs   = intval(floor($dt));
         $usecs  = intval(1000000 * ($dt - $secs));
 
         if (sleep($secs) > 0) {
+            $this->readProcesses();
             // return value is non-zero, meaning our sleep was interrupted by a signal, so restart from here
             $this->sleepToStartOfNextMinute();
 

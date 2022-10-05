@@ -1,4 +1,6 @@
 <?php
 
-class cronException extends Exception {
+namespace cron;
+
+class exception extends \Exception {
 }

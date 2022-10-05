@@ -1,9 +1,11 @@
 <?php
 
+namespace cron;
+
 /**
  * class representing a running job
  */
-class cronProcess {
+class process {
     private string  $command;
     private array   $vars;
     private         $proc;
@@ -19,6 +21,8 @@ class cronProcess {
         $this->command  = $command;
         $this->vars     = $vars;
         $this->pipes    = array();
+
+        log::debug(sprintf('executing "%s"', $this->command));
 
         if (isset($this->vars['SHELL'])) {
             $shell = $this->vars['SHELL'];
@@ -40,7 +44,7 @@ class cronProcess {
             $this->vars
         );
 
-        if (false === $this->proc) throw new cronException(sprintf("unable to execute '%s'", $shell));
+        if (false === $this->proc) throw new exception(sprintf("unable to execute '%s'", $shell));
     }
 
     /**
